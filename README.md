@@ -14,10 +14,11 @@ Drawer is a self-hosted MCP server for Alexa+, built for the Amazon Developer Ha
 | **Technology used at runtime** | `python -m drawer.server` starts the MCP server. The tests call it through a real MCP client. | `tests/test_e2e.py` |
 | **Working demo** | A browser simulator at `/sim` calls the real MCP endpoint with the signed-in person's own token. | `drawer/sim.py` |
 | **Open Source mini challenge** | A new public repo with an MIT license. The storage layer can be reused on its own. | `LICENSE`, `drawer/store.py` |
+| **AWS Builder mini challenge** | AWS KMS wraps the server's master encryption key. I ran the check against the real service. | `drawer/kms.py` |
 | **Run instructions** | Below. | this file |
 | **Product feedback and friction log** | Written from what actually happened during the build. | `FRICTION_LOG.md` |
 
-What this submission does **not** claim: the AWS Builder mini challenge, because my Amazon Bedrock access never worked. It also makes no claim of a test on a real Alexa+ device or account.
+What this submission does **not** claim: any use of Amazon Bedrock, because my access to it never worked. It also makes no claim of a test on a real Alexa+ device or account.
 
 ## See it work
 
@@ -57,7 +58,7 @@ You need Python 3.12 or newer.
 python -m venv venv
 venv\Scripts\activate            (Windows)   or   source venv/bin/activate
 pip install -r requirements.txt pytest
-python -m pytest -q              (expect: 8 passed)
+python -m pytest -q              (expect: 11 passed)
 ```
 
 Start the server. On Windows PowerShell use `$env:DRAWER_HOME="$PWD\data"` first. On Mac or Linux use `export DRAWER_HOME=data`.
@@ -116,6 +117,7 @@ These settings are read from the environment.
 | `DRAWER_TRUST_PROXY` | Set to `1` behind a platform proxy so the sign-in rate limit sees real addresses |
 | `DRAWER_MAX_HOUSEHOLDS` | Cap on new households. The default is 500. |
 | `DRAWER_HOME` | Where the database and key file live |
+| `DRAWER_KMS_KEY_ID` | Optional. Wraps the master key with AWS KMS. See below. |
 
 Free hosting tiers often wipe local files when they restart. A hosted demo should be treated as disposable.
 
@@ -126,6 +128,12 @@ Set `DRAWER_PUBLIC_URL` and `DRAWER_CLIENTS` to the values Amazon gives you for 
 ## Optional AI helper
 
 `DRAWER_AI=bedrock` sends claim-draft requests to Amazon Bedrock after `drawer/redact.py` strips card numbers, emails, phone numbers, links and street addresses. It is a best-effort filter. Set `DRAWER_BEDROCK_MODEL` to a model your account can use. If the call fails Drawer falls back to a plain template. It is off by default. I could not get Bedrock access in time to run it against the real service, so it is tested only against a stand-in.
+
+## Optional: master key wrapped by AWS KMS
+
+Set `DRAWER_KMS_KEY_ID` to a KMS key ID or alias and Drawer asks KMS for a data key instead of using a local key file. Only the wrapped copy (`master.kms`) is stored. On each start the server asks KMS to unwrap it. The plain key is never written to disk. No household data goes to AWS. It needs AWS credentials with `kms:GenerateDataKey` and `kms:Decrypt` on that one key.
+
+Run `python -m drawer.kms` to check access. It prints only the key length, never the key. The three tests in `tests/test_kms.py` use a stand-in for KMS. I also ran the check against the real service twice. The first run created the wrapped key and the second run unwrapped it, which is the path every restart takes. The server prints its key source when it starts.
 
 ## Limits
 
@@ -143,7 +151,7 @@ drawer/triage.py   fixed-rule incident help
 drawer/sim.py      the simulator backend
 drawer/redact.py   personal detail filter for the optional AI helper
 drawer/ai.py       optional Bedrock claim drafting with a template fallback
-tests/             8 tests
+tests/             11 tests
 ```
 
 License: MIT.

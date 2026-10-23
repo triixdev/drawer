@@ -14,6 +14,7 @@ from . import ai, auth, legal, sim, triage
 from .store import Store
 
 store = Store()
+print("Master key source:", "AWS KMS" if os.environ.get("DRAWER_KMS_KEY_ID") else "local key or DRAWER_KEY", flush=True)
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 

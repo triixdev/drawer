@@ -35,6 +35,10 @@ def _home() -> Path:
 
 
 def _master_key() -> bytes:
+    kms_id = os.environ.get("DRAWER_KMS_KEY_ID")
+    if kms_id:
+        from . import kms
+        return kms.master_key(_home(), kms_id)
     env = os.environ.get("DRAWER_KEY")
     if env:
         return base64.urlsafe_b64decode(env.encode())
