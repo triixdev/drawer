@@ -9,14 +9,13 @@ import collections
 import hashlib
 import hmac
 import html
-import json
 import os
 import time
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlparse
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 from .store import Store
@@ -53,8 +52,12 @@ _fails = collections.defaultdict(list)
 
 def _limited(key: str, limit=8, window=600) -> bool:
     now = time.time()
-    _fails[key] = [t for t in _fails[key] if now - t < window]
-    return len(_fails[key]) >= limit
+    recent = [t for t in _fails.get(key, []) if now - t < window]
+    if recent:
+        _fails[key] = recent
+    else:
+        _fails.pop(key, None)
+    return len(recent) >= limit
 
 
 def _page(body: str, status=200) -> HTMLResponse:
@@ -90,6 +93,34 @@ class AuthGate:
         await self.app(scope, receive, send)
 
 
+class Headers:
+    """Adds security headers to every response and stops caching of private pages."""
+
+    CSP = (b"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+           b"frame-ancestors 'none'; base-uri 'none'")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope["path"]
+
+        async def wrapped(message):
+            if message["type"] == "http.response.start":
+                have = {k.lower() for k, _ in message.get("headers", [])}
+                extra = [(b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY"),
+                         (b"referrer-policy", b"no-referrer"), (b"content-security-policy", self.CSP)]
+                if path.startswith(("/authorize", "/sim", "/token", "/mcp")) and b"cache-control" not in have:
+                    extra.append((b"cache-control", b"no-store"))
+                message["headers"] = list(message.get("headers", [])) + [
+                    h for h in extra if h[0] not in have]
+            await send(message)
+
+        await self.app(scope, receive, wrapped)
+
+
 def build_routes(store: Store):
     clients = load_clients()
 
@@ -106,7 +137,7 @@ def build_routes(store: Store):
         })
 
     def _form(q, error=""):
-        hidden = "".join(f'<input type="hidden" name="{k}" value="{html.escape(v)}">'
+        hidden = "".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">'
                          for k, v in q.items())
         err = f'<p class="err">{html.escape(error)}</p>' if error else ""
         return _page(f"""
@@ -120,9 +151,9 @@ Only the passphrase below opens them.</p>{err}
   <option value="create">Start a new household</option>
   <option value="guest">I have a guest code</option>
 </select>
-<label for="name">Household name</label><input id="name" name="name" autocomplete="off">
+<label for="name">Household name</label><input id="name" name="name" autocomplete="off" maxlength="80">
 <label for="secret">Passphrase, or guest code</label>
-<input id="secret" name="secret" type="password" autocomplete="off">
+<input id="secret" name="secret" type="password" autocomplete="off" maxlength="200">
 <p class="small">Use a passphrase of four or more words. Nobody can reset it for you, because nobody else can read your data.</p>
 <button type="submit">Continue</button></form>""")
 
@@ -152,10 +183,14 @@ Only the passphrase below opens them.</p>{err}
             return _page("<h1>Link not valid</h1>", 400)
         keep = {k: v for k, v in q.items() if v}
         ip = request.client.host if request.client else "?"
-        name, secret, mode = str(f.get("name", "")), str(f.get("secret", "")), str(f.get("mode", "open"))
+        name = str(f.get("name", ""))[:80]
+        secret = str(f.get("secret", ""))[:200]
+        mode = str(f.get("mode", "open"))
         if _limited(ip):
             return _form(keep, "Too many tries. Wait ten minutes.")
-        hid, scope, ttl = None, "owner", 3600
+        if mode == "create":
+            _fails[ip].append(time.time())  # creating costs CPU, so it counts against the limit
+        hid, scope = None, "owner"
         if mode == "create":
             if len(secret.split()) < 4 and len(secret) < 16:
                 return _form(keep, "Choose a longer passphrase: four words or sixteen characters.")
@@ -165,7 +200,6 @@ Only the passphrase below opens them.</p>{err}
                 return _form(keep, "This demo is full for now. Try again later.")
             hid = store.create_household(name, secret)
             if not hid:
-                _fails[ip].append(time.time())
                 return _form(keep, "That name is taken, or the details do not match. Try another name.")
         elif mode == "guest":
             got = store.use_guest_code(secret)
@@ -176,6 +210,7 @@ Only the passphrase below opens them.</p>{err}
         if not hid:
             _fails[ip].append(time.time())
             return _form(keep, "Those details do not match.")
+        store.purge_expired()
         code = store.create_code(hid, scope, q["code_challenge"], q["redirect_uri"], q["client_id"])
         params = {"code": code}
         if q.get("state"):
@@ -196,7 +231,7 @@ Only the passphrase below opens them.</p>{err}
             except Exception:
                 return _err("invalid_client", 401)
         client = clients.get(cid)
-        if not client or not hmac.compare_digest(secret, client["secret"]):
+        if not client or not hmac.compare_digest(secret.encode(), client["secret"].encode()):
             return _err("invalid_client", 401)
         if f.get("resource") and str(f["resource"]).rstrip("/") != RESOURCE:
             return _err("invalid_target")
@@ -206,7 +241,7 @@ Only the passphrase below opens them.</p>{err}
             verifier = str(f.get("code_verifier", ""))
             want = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
             if (not row or row["client_id"] != cid or row["redirect_uri"] != str(f.get("redirect_uri", ""))
-                    or not hmac.compare_digest(want, row["challenge"])):
+                    or not hmac.compare_digest(want.encode(), row["challenge"].encode())):
                 return _err("invalid_grant")
             hid, scope = row["household_id"], row["scope"]
         elif grant == "refresh_token":
