@@ -79,7 +79,7 @@ def remember_place(ctx: Context, what: str, where: str, guest_ok: bool = False) 
     """Save where something is, like the main water valve or spare keys. guest_ok lets a house sitter ask."""
     p = who(ctx, owner_only=True)
     store.add_entry(p.household_id, "place", {"name": what, "where": where}, guest_ok=guest_ok)
-    return f"Got it. {what} is {where}." + (" Guests can ask about it." if guest_ok else "")
+    return f"Got it. {what[:1].upper() + what[1:]} is {where}." + (" Guests can ask about it." if guest_ok else "")
 
 
 @mcp.tool()
@@ -131,7 +131,7 @@ def keep_or_return(ctx: Context) -> str:
         return "No return windows are about to close."
     r = rows[0]
     left = "today" if r["days_left"] == 0 else f"in {r['days_left']} days"
-    return (f"The return window for {_name(r)} closes {left}. Have you used it, and are you keeping it? "
+    return (f"The return window for {_name(r)} closes {left}. Have you used it? Are you keeping it? "
             "Say kept or returned and I will stop reminding you.")
 
 
@@ -160,8 +160,8 @@ def something_wrong(ctx: Context, problem: str, item: str = "") -> str:
         return " ".join(t["steps"])
     out = []
     if t["first"]:
-        out.append("First, " + " ".join(
-            f"{e['name']} is {e['where']}." for e in t["first"][:2]))
+        steps = [f"check the {e['name']}: it is {e['where']}" for e in t["first"][:2]]
+        out.append("First, " + ". Then ".join(steps) + ".")
     else:
         out.append("I have no saved shutoff for this. Switch off the nearest supply if it is safe to do so.")
     if t["item"]:
@@ -255,5 +255,7 @@ app = build_app()
 
 if __name__ == "__main__":
     import uvicorn
+    behind_proxy = os.environ.get("DRAWER_TRUST_PROXY") == "1"
     uvicorn.run(app, host=os.environ.get("DRAWER_HOST", "127.0.0.1"),
-                port=int(os.environ.get("PORT", "8000")))
+                port=int(os.environ.get("PORT", "8000")),
+                proxy_headers=behind_proxy, forwarded_allow_ips="*" if behind_proxy else None)

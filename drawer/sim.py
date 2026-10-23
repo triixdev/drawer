@@ -87,7 +87,7 @@ def interpret(text: str, today: date):
         ret = re.search(r"(\d+)[ -]days? return", low)
         yrs = re.search(r"(\d+)[ -]years? warranty", low)
         mos = re.search(r"(\d+)[ -]months? warranty", low)
-        loc = re.search(r"(?:kept|papers|receipt|bill|box) in (?:the )?(.+)$", t, re.I)
+        loc = re.search(r"(?:kept|papers|receipt|bill|box) in (.+)$", t, re.I)
         return "remember_purchase", {
             "name": name, "purchased_on": parse_date(body, today),
             "store_name": store.group(1).strip() if store else "",

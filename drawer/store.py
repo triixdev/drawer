@@ -125,6 +125,10 @@ class Store:
             return row["id"]
         return None
 
+    def household_count(self) -> int:
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM households").fetchone()[0]
+
     def household_exists(self, hid: str) -> bool:
         with self.lock:
             return self.db.execute("SELECT 1 FROM households WHERE id=?", (hid,)).fetchone() is not None

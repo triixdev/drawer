@@ -54,7 +54,7 @@ def triage(entries, problem: str, today: date, guest: bool = False, hint: str = 
     if cat == "emergency":
         return {"category": cat, "emergency": True, "steps": [
             "Leave the house now and take everyone with you.",
-            "Do not switch anything on or off, and do not use a lighter or a phone indoors if you smell gas.",
+            "Do not switch anything on or off. Do not use a lighter or a phone indoors if you smell gas.",
             "From outside, call your local emergency number."], "item": None}
     _, place_hints, trades = CATEGORIES.get(cat, ((), (), ()))
     places = [e for e in entries if e["kind"] == "place" and (not guest or e["guest_ok"])]

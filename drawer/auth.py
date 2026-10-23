@@ -161,6 +161,8 @@ Only the passphrase below opens them.</p>{err}
                 return _form(keep, "Choose a longer passphrase: four words or sixteen characters.")
             if not name.strip():
                 return _form(keep, "Give your household a name.")
+            if store.household_count() >= int(os.environ.get("DRAWER_MAX_HOUSEHOLDS", "500")):
+                return _form(keep, "This demo is full for now. Try again later.")
             hid = store.create_household(name, secret)
             if not hid:
                 _fails[ip].append(time.time())

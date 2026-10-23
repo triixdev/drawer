@@ -6,18 +6,20 @@ PRIVACY = """
 and the incidents you report are encrypted before they reach the disk. Each household has its own
 encryption key, derived from a master key that never sits in the code or the repository.</p>
 <p>These stay readable to whoever runs the server: purchase, return and warranty dates, the time of
-each incident, and counts of entries. We need dates to sort deadlines.</p>
+each incident and counts of entries. We need dates to sort deadlines.</p>
 <h2>What we do not keep</h2>
 <p>No email address, phone number or real name is asked for. Your passphrase is stored only as a salted
 hash, so we cannot recover it. Sign-in tokens are stored only as hashes. Server logs do not contain
 what you said.</p>
 <h2>Who sees it</h2>
-<p>Nobody without your passphrase. A guest code opens only the entries you marked guest-safe, and it
+<p>Nobody without your passphrase. A guest code opens only the entries you marked guest-safe. It
 expires by itself. When the optional AI helper is switched on, your text goes to Amazon Bedrock after card
 numbers, emails, phone numbers and street addresses are stripped out. Switched off, nothing leaves the server.</p>
 <h2>Deleting</h2>
 <p>Say "forget everything" or call the forget_everything tool with confirmation. It deletes every entry,
-incident, guest code and token, removes the household, and compacts the database file.</p>
+incident, guest code and token, removes the household and compacts the database file.</p>
+<h2>Demo servers</h2>
+<p>A hosted demo can be wiped or restarted at any time and everything on it is lost. Use made-up details there.</p>
 <h2>Contact</h2><p>Questions or deletion help: open an issue at <a href="https://github.com/triixdev/drawer/issues">github.com/triixdev/drawer/issues</a>. Please do not post personal details there.</p>
 """
 TERMS = """
