@@ -1,12 +1,13 @@
 """Drawer: your household's memory, spoken. An MCP server for Alexa+."""
+import calendar
 import os
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlparse
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -31,6 +32,10 @@ def who(ctx: Context, owner_only: bool = False) -> auth.Principal:
     return p
 
 
+def clip(text, n=200) -> str:
+    return str(text or "").strip()[:n]
+
+
 mcp = MCPServer(
     "Drawer",
     instructions=(
@@ -45,6 +50,15 @@ def _name(e):
     return e["name"] + (f" from {e['store']}" if e.get("store") else "")
 
 
+def _save(hid, kind, data, **kw):
+    """Returns an error sentence if the drawer is full, else None."""
+    try:
+        store.add_entry(hid, kind, data, **kw)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
 @mcp.tool()
 def remember_purchase(ctx: Context, name: str, purchased_on: str, store_name: str = "",
                       return_days: int = 0, warranty_months: int = 0, note: str = "",
@@ -52,19 +66,26 @@ def remember_purchase(ctx: Context, name: str, purchased_on: str, store_name: st
     """Save something bought. purchased_on is YYYY-MM-DD. Only set return_days or warranty_months
     if the person said them."""
     p = who(ctx, owner_only=True)
+    name = clip(name, 120)
+    if not name:
+        return "What did you buy?"
     try:
         bought = date.fromisoformat(purchased_on)
     except ValueError:
         return "I need the purchase date as year, month, day."
-    from datetime import timedelta
+    return_days = max(0, min(int(return_days), 365))
+    warranty_months = max(0, min(int(warranty_months), 240))
     return_by = (bought + timedelta(days=return_days)).isoformat() if return_days > 0 else None
     warranty = None
     if warranty_months > 0:
         m = bought.month - 1 + warranty_months
-        warranty = date(bought.year + m // 12, m % 12 + 1, min(bought.day, 28)).isoformat()
-    store.add_entry(p.household_id, "purchase",
-                    {"name": name, "store": store_name, "note": note, "location": location},
-                    purchased_on, return_by, warranty)
+        y, mo = bought.year + m // 12, m % 12 + 1
+        warranty = date(y, mo, min(bought.day, calendar.monthrange(y, mo)[1])).isoformat()
+    full = _save(p.household_id, "purchase",
+                 {"name": name, "store": clip(store_name, 80), "note": clip(note), "location": clip(location, 120)},
+                 purchased_on=purchased_on, return_by=return_by, warranty_until=warranty)
+    if full:
+        return full
     out = [f"Saved {name}."]
     if return_by:
         out.append(f"Return window closes {return_by}, as you told me.")
@@ -79,7 +100,12 @@ def remember_purchase(ctx: Context, name: str, purchased_on: str, store_name: st
 def remember_place(ctx: Context, what: str, where: str, guest_ok: bool = False) -> str:
     """Save where something is, like the main water valve or spare keys. guest_ok lets a house sitter ask."""
     p = who(ctx, owner_only=True)
-    store.add_entry(p.household_id, "place", {"name": what, "where": where}, guest_ok=guest_ok)
+    what, where = clip(what, 120), clip(where, 200)
+    if not what or not where:
+        return "Tell me what it is and where it is."
+    full = _save(p.household_id, "place", {"name": what, "where": where}, guest_ok=guest_ok)
+    if full:
+        return full
     return f"Got it. {what[:1].upper() + what[1:]} is {where}." + (" Guests can ask about it." if guest_ok else "")
 
 
@@ -87,8 +113,12 @@ def remember_place(ctx: Context, what: str, where: str, guest_ok: bool = False) 
 def remember_vendor(ctx: Context, name: str, trade: str, phone: str, guest_ok: bool = False) -> str:
     """Save someone to call, like a plumber. trade is what they do."""
     p = who(ctx, owner_only=True)
-    store.add_entry(p.household_id, "vendor", {"name": name, "trade": trade, "phone": phone},
-                    guest_ok=guest_ok)
+    name, trade, phone = clip(name, 80), clip(trade, 80), clip(phone, 40)
+    if not name or not phone:
+        return "I need a name and a phone number."
+    full = _save(p.household_id, "vendor", {"name": name, "trade": trade, "phone": phone}, guest_ok=guest_ok)
+    if full:
+        return full
     return f"Saved {name}, {trade}."
 
 
@@ -97,7 +127,7 @@ def where_is(ctx: Context, query: str) -> str:
     """Find where something is kept, or who to call."""
     p = who(ctx)
     guest = p.scope == "guest"
-    hits = store.search(p.household_id, query, guest_only=guest)
+    hits = store.search(p.household_id, clip(query, 200), guest_only=guest)
     out = []
     for h in hits[:4]:
         if h["kind"] == "place":
@@ -142,7 +172,7 @@ def close_item(ctx: Context, query: str, outcome: str) -> str:
     p = who(ctx, owner_only=True)
     if outcome not in ("kept", "returned"):
         return "Say kept or returned."
-    hits = [h for h in store.search(p.household_id, query, kinds=["purchase"]) if h["status"] == "open"]
+    hits = [h for h in store.search(p.household_id, clip(query, 200), kinds=["purchase"]) if h["status"] == "open"]
     if len(hits) != 1:
         return f"I found {len(hits)} matches. Which one?" if hits else "No open purchase matches that."
     store.set_status(p.household_id, hits[0]["id"], outcome)
@@ -154,6 +184,7 @@ def something_wrong(ctx: Context, problem: str, item: str = "") -> str:
     """Use first when something breaks, leaks, trips or smells wrong. Says what to do right now."""
     p = who(ctx)
     guest = p.scope == "guest"
+    problem, item = clip(problem, 300), clip(item, 120)
     entries = store.entries(p.household_id)
     t = triage.triage(entries, problem, today(), guest=guest, hint=item)
     if t["emergency"]:
@@ -187,12 +218,12 @@ def something_wrong(ctx: Context, problem: str, item: str = "") -> str:
 def draft_claim(ctx: Context, item: str, problem: str) -> str:
     """Draft (never send) a warranty claim message for something that broke."""
     p = who(ctx, owner_only=True)
-    hits = [h for h in store.search(p.household_id, item, kinds=["purchase"])]
+    hits = [h for h in store.search(p.household_id, clip(item, 200), kinds=["purchase"])]
     if len(hits) != 1:
         return f"I found {len(hits)} matches for that. Which item?" if hits else "I have no purchase like that saved."
     h = hits[0]
     text, source = ai.draft_claim({"name": h["name"], "store": h.get("store", ""),
-        "purchased_on": h["purchased_on"], "problem": problem,
+        "purchased_on": h["purchased_on"], "problem": clip(problem, 300),
         "coverage": triage.coverage(h, today())})
     return "Here is a draft. Read it before you send it: " + text
 
@@ -249,6 +280,7 @@ def build_app():
         Mount("/static", StaticFiles(directory=STATIC)),
     ])
     app.add_middleware(auth.AuthGate, store=store)
+    app.add_middleware(auth.Headers)  # added last so it wraps everything, including bare 401s
     return app
 
 
@@ -258,5 +290,5 @@ if __name__ == "__main__":
     import uvicorn
     behind_proxy = os.environ.get("DRAWER_TRUST_PROXY") == "1"
     uvicorn.run(app, host=os.environ.get("DRAWER_HOST", "127.0.0.1"),
-                port=int(os.environ.get("PORT", "8000")),
+                port=int(os.environ.get("PORT", "8000")), access_log=False,
                 proxy_headers=behind_proxy, forwarded_allow_ips="*" if behind_proxy else None)
