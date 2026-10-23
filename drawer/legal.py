@@ -18,7 +18,7 @@ numbers, emails, phone numbers and street addresses are stripped out. Switched o
 <h2>Deleting</h2>
 <p>Say "forget everything" or call the forget_everything tool with confirmation. It deletes every entry,
 incident, guest code and token, removes the household, and compacts the database file.</p>
-<h2>Contact</h2><p>Questions: <span id="contact">set DRAWER_CONTACT before you publish</span></p>
+<h2>Contact</h2><p>Questions or deletion help: open an issue at <a href="https://github.com/triixdev/drawer/issues">github.com/triixdev/drawer/issues</a>. Please do not post personal details there.</p>
 """
 TERMS = """
 <h1>Terms</h1>
