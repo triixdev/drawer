@@ -31,6 +31,8 @@ def test_sentences_become_the_right_tool():
     assert interpret("forget everything", T) == ("forget_everything", {"confirm": False})
     assert interpret("yes forget everything", T) == ("forget_everything", {"confirm": True})
     assert interpret("blah blah", T) is None
+    assert interpret("I bought a kettle with a 10 day return window", T)[0] == "remember_purchase"
+assert interpret("I bought a TV, extended warranty expires 2028", T)[0] == "remember_purchase"
 
 
 def test_simulator_through_the_real_server(base):
@@ -62,7 +64,7 @@ def test_simulator_through_the_real_server(base):
     assert "behind the water heater" in gsay("where is the water valve")
     assert "Ravi" in gsay("who do I call for the plumber") or "98300" in gsay("who do I call for the plumber")
     assert "water valve" not in gsay("who do I call for the plumber")
-    assert "can't do that" in gsay("what's closing")
+    assert "only for the household owner" in gsay("what's closing")
     assert "Bosch" not in gsay("where is the washing machine")
     shelf = httpx.get(url + "/sim/shelf", headers=H).json()
     assert shelf["closing"] and shelf["places"] and shelf["vendors"]
