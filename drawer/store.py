@@ -2,8 +2,10 @@
 
 Safety rules baked in:
   * Everything a person says (names, places, phones, notes) is encrypted.
+  * Purchase, return and warranty dates and incident times are encrypted too.
   * Each household gets its own key derived from the master key, so a bug
     that reads another household's row cannot decrypt it.
+  * Household names are stored only as a keyed hash (HMAC with the master key).
   * Tokens, codes and passphrases are stored only as hashes.
   * wipe() removes the household and revokes every token.
 """
@@ -28,6 +30,8 @@ STOPWORDS = {"the", "for", "and", "who", "where", "what", "call", "are", "was", 
              "that", "you", "does", "from", "into", "our", "his", "her", "can", "should", "need"}
 WORDS = ["maple", "river", "cedar", "amber", "slate", "heron", "linen", "quartz",
          "fennel", "harbor", "willow", "copper", "meadow", "pebble", "saffron", "tundra"]
+MAX_ENTRIES = 500
+MAX_INCIDENTS = 200
 
 
 def _home() -> Path:
@@ -63,7 +67,8 @@ class Store:
         _home().mkdir(parents=True, exist_ok=True)
         self.master = master or _master_key()
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(db_path or str(_home() / "drawer.db"), check_same_thread=False)
+        self.db_file = db_path or str(_home() / "drawer.db")
+        self.db = sqlite3.connect(self.db_file, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(
             """
@@ -90,7 +95,13 @@ class Store:
                 at TEXT NOT NULL, secret BLOB NOT NULL);
             """
         )
+        self.db.execute("PRAGMA secure_delete=ON")
         self.db.commit()
+        for p, mode in ((_home(), 0o700), (Path(self.db_file), 0o600)):
+            try:
+                p.chmod(mode)
+            except OSError:
+                pass
 
     # ---- encryption, one key per household
     def _fernet(self, hid: str) -> Fernet:
@@ -104,9 +115,12 @@ class Store:
     def _unseal(self, hid, blob: bytes) -> dict:
         return json.loads(self._fernet(hid).decrypt(blob))
 
+    def _name_key(self, name: str) -> str:
+        return hmac.new(self.master, b"name:" + name.strip().lower().encode(), hashlib.sha256).hexdigest()
+
     # ---- households
     def create_household(self, name: str, passphrase: str) -> str | None:
-        key = _h(name.strip().lower())
+        key = self._name_key(name)
         salt = secrets.token_bytes(16)
         hid = secrets.token_hex(8)
         with self.lock:
@@ -122,7 +136,7 @@ class Store:
     def verify_household(self, name: str, passphrase: str) -> str | None:
         with self.lock:
             row = self.db.execute(
-                "SELECT * FROM households WHERE name_key=?", (_h(name.strip().lower()),)).fetchone()
+                "SELECT * FROM households WHERE name_key=?", (self._name_key(name),)).fetchone()
         salt = row["salt"] if row else b"\0" * 16
         got = _scrypt(passphrase, salt)  # always do the work, so timing does not leak
         if row and hmac.compare_digest(got, row["pass_hash"]):
@@ -159,6 +173,13 @@ class Store:
             self.db.execute("DELETE FROM tokens WHERE token_hash=?", (_h(raw),))
             self.db.commit()
 
+    def purge_expired(self):
+        now = time.time()
+        with self.lock:
+            for t in ("tokens", "codes", "guest_passes"):
+                self.db.execute(f"DELETE FROM {t} WHERE expires_at < ?", (now,))
+            self.db.commit()
+
     def create_code(self, hid, scope, challenge, redirect_uri, client_id) -> str:
         raw = secrets.token_urlsafe(24)
         with self.lock:
@@ -178,7 +199,8 @@ class Store:
 
     # ---- guest passes
     def create_guest_pass(self, hid, hours: int) -> str:
-        code = f"{secrets.choice(WORDS)}-{secrets.choice(WORDS)}-{secrets.randbelow(10000):04d}"
+        code = "-".join([secrets.choice(WORDS), secrets.choice(WORDS), secrets.choice(WORDS),
+                         f"{secrets.randbelow(10000):04d}"])
         with self.lock:
             self.db.execute("INSERT INTO guest_passes VALUES (?,?,?)",
                             (_h(code), hid, time.time() + hours * 3600))
@@ -202,14 +224,17 @@ class Store:
             self.db.commit()
         return len(hashes_)
 
-    # ---- entries
+    # ---- entries (dates live inside the encrypted blob under "_d")
     def add_entry(self, hid, kind, data, purchased_on=None, return_by=None,
                   warranty_until=None, guest_ok=False) -> int:
         with self.lock:
+            n = self.db.execute("SELECT COUNT(*) FROM entries WHERE household_id=?", (hid,)).fetchone()[0]
+            if n >= MAX_ENTRIES:
+                raise ValueError("Your drawer is full.")
+            data = {**data, "_d": [purchased_on, return_by, warranty_until]}
             cur = self.db.execute(
-                "INSERT INTO entries(household_id,kind,secret,purchased_on,return_by,warranty_until,guest_ok)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (hid, kind, self._seal(hid, data), purchased_on, return_by, warranty_until, int(guest_ok)))
+                "INSERT INTO entries(household_id,kind,secret,guest_ok) VALUES (?,?,?,?)",
+                (hid, kind, self._seal(hid, data), int(guest_ok)))
             self.db.commit()
             return cur.lastrowid
 
@@ -222,10 +247,14 @@ class Store:
             q += " AND guest_ok=1"
         with self.lock:
             rows = self.db.execute(q, a).fetchall()
-        return [{"id": r["id"], "kind": r["kind"], **self._unseal(hid, r["secret"]),
-                 "purchased_on": r["purchased_on"], "return_by": r["return_by"],
-                 "warranty_until": r["warranty_until"], "status": r["status"],
-                 "guest_ok": bool(r["guest_ok"])} for r in rows]
+        out = []
+        for r in rows:
+            d = self._unseal(hid, r["secret"])
+            # rows made by older versions kept the dates in plain columns
+            pd, rb, wu = d.pop("_d", [r["purchased_on"], r["return_by"], r["warranty_until"]])
+            out.append({"id": r["id"], "kind": r["kind"], **d, "purchased_on": pd, "return_by": rb,
+                        "warranty_until": wu, "status": r["status"], "guest_ok": bool(r["guest_ok"])})
+        return out
 
     def set_status(self, hid, entry_id, status) -> bool:
         with self.lock:
@@ -262,11 +291,17 @@ class Store:
                 res.append(e)
         return res
 
-    # ---- incidents
+    # ---- incidents (time lives inside the encrypted blob)
     def log_incident(self, hid, data: dict) -> int:
         with self.lock:
+            n = self.db.execute("SELECT COUNT(*) FROM incidents WHERE household_id=?", (hid,)).fetchone()[0]
+            if n >= MAX_INCIDENTS:
+                self.db.execute(
+                    "DELETE FROM incidents WHERE id IN (SELECT id FROM incidents WHERE household_id=? "
+                    "ORDER BY id LIMIT ?)", (hid, n - MAX_INCIDENTS + 1))
+            blob = self._seal(hid, {**data, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
             cur = self.db.execute("INSERT INTO incidents(household_id,at,secret) VALUES (?,?,?)",
-                                  (hid, time.strftime("%Y-%m-%dT%H:%M:%S"), self._seal(hid, data)))
+                                  (hid, "", blob))
             self.db.commit()
             return cur.lastrowid
 
@@ -274,7 +309,12 @@ class Store:
         with self.lock:
             rows = self.db.execute("SELECT * FROM incidents WHERE household_id=? ORDER BY id DESC",
                                    (hid,)).fetchall()
-        return [{"id": r["id"], "at": r["at"], **self._unseal(hid, r["secret"])} for r in rows]
+        out = []
+        for r in rows:
+            d = self._unseal(hid, r["secret"])
+            d.setdefault("at", r["at"])
+            out.append({"id": r["id"], **d})
+        return out
 
     # ---- the big red button
     def wipe(self, hid) -> int:
