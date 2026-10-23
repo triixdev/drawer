@@ -1,0 +1,44 @@
+:root{
+  --paper:#ece4d3; --paper-2:#e2d8c3; --ink:#2a251e; --muted:#6b6355;
+  --rust:#8f3d22; --moss:#46513c; --rule:#b9ad94;
+  --body:"Charter","Bitstream Charter","Iowan Old Style","Palatino Linotype",Georgia,serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{--paper:#221e18; --paper-2:#2b261e; --ink:#eadfca; --muted:#a89d86;
+        --rust:#d9835f; --moss:#9fb08c; --rule:#4a4234;}
+}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;color:var(--ink);font:17px/1.55 var(--body);background:var(--paper)}
+main{max-width:34rem;margin:0 auto;padding:3rem 1.25rem 4rem}
+h1{font-size:2rem;line-height:1.15;margin:0 0 .4rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.15rem;margin:2rem 0 .4rem}
+p{margin:.6rem 0}
+.small{font-size:.9rem;color:var(--muted)}
+label{display:block;margin:1.1rem 0 .3rem;font-weight:700;font-size:.95rem}
+input,select{width:100%;padding:.65rem .7rem;font:inherit;color:var(--ink);
+  background:var(--paper-2);border:1px solid var(--ink);border-radius:0}
+input:focus,select:focus,button:focus,a:focus{outline:3px solid var(--rust);outline-offset:2px}
+button{margin-top:1.5rem;padding:.7rem 1.3rem;font:inherit;font-weight:700;
+  color:var(--paper);background:var(--ink);border:1px solid var(--ink);border-radius:0;cursor:pointer}
+a{color:var(--rust)}
+hr{border:0;border-top:1px solid var(--rule);margin:2rem 0}
+.err{border:1px solid var(--rust);padding:.6rem .8rem;color:var(--rust);margin:1rem 0}
+footer{margin-top:3rem;font-size:.85rem;color:var(--muted)}
+.wide{max-width:44rem}
+.wordmark{font-size:1.1rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin:0 0 2rem}
+.log{list-style:none;margin:1.5rem 0;padding:0;border-top:1px solid var(--ink)}
+.log li{padding:.8rem 0;border-bottom:1px solid var(--rule)}
+.log li.bot{background:var(--paper-2);padding-left:.8rem;padding-right:.8rem}
+.who{display:block;font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.bot .who{color:var(--rust)}
+.log p{margin:.2rem 0 0}
+.row{display:flex;gap:.5rem}.row input{flex:1}.row button{margin-top:0}
+.try button{margin:.15rem .6rem .15rem 0;padding:0;background:none;color:var(--rust);border:0;
+  border-bottom:1px solid var(--rust);font-weight:400;font-size:.95rem}
+.shelf dt{font-weight:700;margin-top:.7rem}.shelf dd{margin:0 0 .2rem;color:var(--ink)}
+.sk{height:1rem;margin:.6rem 0;background:var(--rule);opacity:.55;animation:sk 1.4s ease-in-out infinite}
+.sk.s{width:60%}
+@keyframes sk{50%{opacity:.2}}
+@media (prefers-reduced-motion:reduce){.sk{animation:none}}
+.try button{display:inline;text-align:left}

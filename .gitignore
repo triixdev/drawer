@@ -1,0 +1,9 @@
+.env
+*.db
+key
+__pycache__/
+.venv/
+venv/
+data/
+SUBMISSION.md
+VIDEO_SCRIPT.md

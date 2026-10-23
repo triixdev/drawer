@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drawer, try it</title><link rel="stylesheet" href="/static/drawer.css"></head>
+<body><main class="wide">
+<p class="wordmark">Drawer</p>
+<h1>Your home, remembered out loud</h1>
+<p>Say where the water valve is, what you bought and when the warranty ends. When something breaks, ask
+what to do. This page is a simulated voice assistant. It runs on the real Drawer server through the real
+sign-in, and it is rules only, with no AI model behind it.</p>
+
+<section id="out">
+<p><button id="go">Open your drawer</button></p>
+<p class="small">You will choose a household name and a passphrase. Nothing else is asked.</p>
+</section>
+
+<section id="in" hidden>
+<ol class="log" id="log" aria-live="polite"></ol>
+<form class="row" id="f"><label for="t" class="small" style="margin:0;align-self:center">Say</label>
+<input id="t" autocomplete="off" maxlength="500"><button type="submit">Send</button></form>
+<p class="try small" id="try"></p>
+<h2>On the shelf</h2>
+<div class="shelf" id="shelf"><div class="sk"></div><div class="sk s"></div><div class="sk"></div></div>
+<p><button id="bye" style="margin-top:1rem">Sign out here</button></p>
+</section>
+
+<footer><a href="/privacy">Privacy</a> &nbsp; <a href="/terms">Terms</a><br>
+A student hackathon project. Not made by or connected to Amazon. Dates are the ones you tell it.</footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const REDIRECT = location.origin + "/sim", CLIENT = "drawer-sim";
+const store = { get: k => { try { return sessionStorage.getItem(k) } catch (e) { return null } },
+  set: (k, v) => { try { sessionStorage.setItem(k, v) } catch (e) {} },
+  del: k => { try { sessionStorage.removeItem(k) } catch (e) {} } };
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const rand = n => b64(crypto.getRandomValues(new Uint8Array(n)));
+
+async function signIn() {
+  const v = rand(48), st = rand(16);
+  store.set("v", v); store.set("st", st);
+  const ch = b64(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)));
+  const q = new URLSearchParams({ client_id: CLIENT, redirect_uri: REDIRECT, response_type: "code",
+    code_challenge: ch, code_challenge_method: "S256", state: st, resource: location.origin + "/mcp" });
+  location.href = "/authorize?" + q;
+}
+
+async function finishSignIn(p) {
+  if (p.get("state") !== store.get("st")) return;
+  const r = await fetch("/token", { method: "POST", body: new URLSearchParams({
+    grant_type: "authorization_code", code: p.get("code"), code_verifier: store.get("v"),
+    redirect_uri: REDIRECT, client_id: CLIENT, resource: location.origin + "/mcp" }) });
+  if (r.ok) store.set("tok", (await r.json()).access_token);
+  history.replaceState(null, "", "/sim");
+}
+
+function add(who, text, bot) {
+  const li = document.createElement("li"); if (bot) li.className = "bot";
+  const w = document.createElement("span"); w.className = "who"; w.textContent = who;
+  const p = document.createElement("p"); p.textContent = text;
+  li.append(w, p); $("log").append(li); li.scrollIntoView({ block: "nearest" });
+}
+
+async function api(path, opt) {
+  const r = await fetch(path, { ...opt, headers: { "Authorization": "Bearer " + store.get("tok"),
+    "Content-Type": "application/json" } });
+  if (r.status === 401) { store.del("tok"); show(false); throw new Error("signed out"); }
+  return r.json();
+}
+
+function row(dl, a, b) {
+  const dt = document.createElement("dt"), dd = document.createElement("dd");
+  dt.textContent = a; dd.textContent = b; dl.append(dt, dd);
+}
+
+async function loadShelf() {
+  const el = $("shelf"); el.replaceChildren(...[0, 1, 2].map(i => Object.assign(document.createElement("div"), { className: "sk" + (i == 1 ? " s" : "") })));
+  const d = await api("/sim/shelf"), dl = document.createElement("dl");
+  d.closing.forEach(c => row(dl, c.name, c.what + (c.days_left === 0 ? " ends today" : " ends in " + c.days_left + " days (" + c.deadline + ")")));
+  d.places.forEach(c => row(dl, c.name, c.where));
+  d.vendors.forEach(c => row(dl, c.name + ", " + c.trade, c.phone));
+  if (!dl.children.length) { const p = document.createElement("p"); p.className = "small"; p.textContent = "Nothing saved yet. Tell it something."; el.replaceChildren(p); }
+  else el.replaceChildren(dl);
+}
+
+async function say(text) {
+  add("You", text, false);
+  const d = await api("/sim/say", { method: "POST", body: JSON.stringify({ text }) });
+  add("Assistant", d.reply, true);
+  loadShelf();
+}
+
+const TRY = ["the main water valve is behind the water heater, guests can know", "my plumber is Ravi, 98300 11122, guests can call him",
+  "I bought a Bosch washing machine at Croma 5 days ago, 10 day return, 2 year warranty, papers in the blue file",
+  "what's closing", "the washing machine is leaking water", "draft a claim for the washing machine, it leaks from the door",
+  "make a guest code for 2 days"];
+
+function show(on) { $("out").hidden = on; $("in").hidden = !on; }
+
+(async () => {
+  const p = new URLSearchParams(location.search);
+  if (p.get("code")) await finishSignIn(p);
+  $("go").onclick = signIn;
+  $("bye").onclick = () => { store.del("tok"); show(false); };
+  $("f").onsubmit = e => { e.preventDefault(); const t = $("t").value.trim(); $("t").value = ""; if (t) say(t).catch(() => {}); };
+  TRY.forEach(t => { const b = document.createElement("button"); b.type = "button"; b.textContent = t;
+    b.onclick = () => { $("t").value = t; $("t").focus(); }; $("try").append(b); });
+  if (store.get("tok")) { show(true); add("Assistant", "Your drawer is open. Tell me something to remember, or ask for help.", true); loadShelf().catch(() => {}); }
+})();
+</script></body></html>
