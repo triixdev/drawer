@@ -21,6 +21,11 @@ MONTHS = {m: i + 1 for i, m in enumerate(
     "january february march april may june july august september october november december".split())}
 HELP = ("I can save purchases, places and phone numbers, tell you what is closing, find things, "
         "and help when something breaks. Try: the main water valve is behind the water heater.")
+OWNER_ONLY = {"remember_purchase", "remember_place", "remember_vendor", "whats_closing",
+              "keep_or_return", "close_item", "draft_claim", "what_happened",
+              "make_guest_pass", "end_guest_passes", "forget_everything"}
+GUEST_HELP = ("That one is only for the household owner. As a guest you can ask where "
+              "something is or who to call or say what went wrong.")
 
 
 def parse_date(text: str, today: date) -> str:
@@ -29,13 +34,19 @@ def parse_date(text: str, today: date) -> str:
         return (today - timedelta(days=1)).isoformat()
     m = re.search(r"(\d+) days? ago", t)
     if m:
-        return (today - timedelta(days=int(m.group(1)))).isoformat()
+        try:
+            return (today - timedelta(days=int(m.group(1)))).isoformat()
+        except OverflowError:
+            return today.isoformat()
     m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", t)
     if m:
         return m.group(1)
     m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)? (" + "|".join(MONTHS) + r")\b", t)
     if m:
-        return date(today.year, MONTHS[m.group(2)], int(m.group(1))).isoformat()
+        try:
+            return date(today.year, MONTHS[m.group(2)], int(m.group(1))).isoformat()
+        except ValueError:
+            pass
     return today.isoformat()
 
 
@@ -56,14 +67,15 @@ def interpret(text: str, today: date):
         return "what_happened", {}
     if re.search(r"keep or return|should i keep|check.?in", low):
         return "keep_or_return", {}
-    if re.search(r"closing|expir|running out|deadline", low):
+    if re.match(r"(what|anything|show|list|tell|is|are|any)\b", low) and \
+            re.search(r"\b(closing|expir\w*|running out|deadlines?)\b", low):
         m = re.search(r"(\d+)\s*day", low)
         return "whats_closing", {"within_days": int(m.group(1)) if m else 14}
     m = re.search(r"draft (?:a )?claim (?:for|about) (?:my |the )?(.+?)(?:,| it | that | because )\s*(.*)", t, re.I)
     if m:
         return "draft_claim", {"item": m.group(1).strip(), "problem": m.group(2).strip() or "it stopped working"}
-    m = re.search(r"\b(kept|keeping|keep|returned|returning|return)\b (?:the |my )?(.+)", low)
-    if m and re.match(r"(i'?m |i |we )", low):
+    m = re.match(r"(?:i'?m |i |we )(kept|keeping|keep|returned|returning|return)\b (?:the |my )?(.+)", low)
+    if m:
         out = "kept" if m.group(1).startswith("keep") or m.group(1) == "kept" else "returned"
         return "close_item", {"query": m.group(2), "outcome": out}
     if re.search(r"\b(leak|leaking|flood|burst|broke|broken|not working|stopped working|tripped|"
@@ -103,13 +115,13 @@ def interpret(text: str, today: date):
 
 
 async def run_tool(base_url: str, token: str, tool: str, args: dict) -> str:
-    client = httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"})
-    async with streamable_http_client(base_url + "/mcp", http_client=client) as st:
-        async with ClientSession(st[0], st[1]) as s:
-            await s.initialize()
-            r = await s.call_tool(tool, args)
-            text = r.content[0].text if r.content else ""
-            return "I can't do that with this sign-in." if r.is_error else text
+    async with httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=15) as client:
+        async with streamable_http_client(base_url + "/mcp", http_client=client) as st:
+            async with ClientSession(st[0], st[1]) as s:
+                await s.initialize()
+                r = await s.call_tool(tool, args)
+                text = r.content[0].text if r.content else ""
+                return "I can't do that with this sign-in." if r.is_error else text
 
 
 def routes(store, today_fn):
@@ -125,14 +137,26 @@ def routes(store, today_fn):
         p = who(request)
         if not p:
             return JSONResponse({"error": "signed_out"}, status_code=401)
-        body = await request.json()
-        text = str(body.get("text", ""))[:500]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        text = str(body.get("text", "") if isinstance(body, dict) else "")[:500]
         hit = interpret(text, today_fn())
         if not hit:
             return JSONResponse({"reply": HELP, "tool": None})
         tool, args = hit
+        if p.scope == "guest" and tool in OWNER_ONLY:
+            return JSONResponse({"reply": GUEST_HELP, "tool": None})
         token = request.headers["authorization"][7:].strip()
-        return JSONResponse({"reply": await run_tool(base, token, tool, args), "tool": tool})
+        try:
+            reply = await run_tool(base, token, tool, args)
+        except Exception:
+            # a successful wipe revokes the token, so the client's last request can fail
+            if tool == "forget_everything" and args.get("confirm") and not store.household_exists(p.household_id):
+                return JSONResponse({"reply": "Done. Your household was deleted.", "tool": tool})
+            return JSONResponse({"reply": "Something went wrong on my side. Try again.", "tool": tool})
+        return JSONResponse({"reply": reply, "tool": tool})
 
     async def shelf(request: Request):
         p = who(request)
